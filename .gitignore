@@ -123,5 +123,4 @@ fabric.properties
 .idea/sonarlint
 
 # Build files
-dist
 dist-test
