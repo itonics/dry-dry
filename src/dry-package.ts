@@ -2,10 +2,11 @@ import * as deepDiff from 'deep-diff';
 import * as merge from 'deepmerge';
 import * as fs from 'fs';
 
-import { DependencyResolver } from './dependency-resolver';
-import { DryPackageContent } from './dry-package-content';
-import { JsonUtils } from './json-utils';
-import { NpmPackage } from './npm-package';
+import {DependencyResolver} from './dependency-resolver';
+import {DryPackageContent} from './dry-package-content';
+import {JsonUtils} from './json-utils';
+import {NpmPackage} from './npm-package';
+import {error} from 'util';
 
 // TODO: consider adding a type to 'any'
 // tslint:disable-next-line:no-any
@@ -18,12 +19,11 @@ export type WeakDryPackageContent = DryPackageContent & any;
 export class DryPackage {
     private static readonly PACKAGE_DRY_JSON = 'package-dry.json';
 
-    private constructor(
-        private readonly dependencyResolver: DependencyResolver,
-        private readonly location: string,
-        // tslint:disable-next-line:variable-name
-        private _content: WeakDryPackageContent,
-    ) {}
+    private constructor(private readonly dependencyResolver: DependencyResolver,
+                        private readonly location: string,
+                        // tslint:disable-next-line:variable-name
+                        private _content: WeakDryPackageContent,) {
+    }
 
     public static readFromDisk(dependencyResolver: DependencyResolver): DryPackage {
         const location = './' + DryPackage.PACKAGE_DRY_JSON;
@@ -93,6 +93,19 @@ export class DryPackage {
         });
     }
 
+    private loadFromFile(path: string): Promise<DryPackage> {
+        console.info('loading dry from path', path);
+        try {
+            let content = fs.readFileSync(path, 'utf8');
+
+            return Promise.resolve(new DryPackage(this.dependencyResolver, path, JSON.parse(content)));
+        } catch (e) {
+            console.error('error', e);
+
+            throw e;
+        }
+    }
+
     private getParent(): Promise<DryPackage> {
         const dry = this._content.dry;
         if (!dry) {
@@ -101,11 +114,40 @@ export class DryPackage {
         if (!dry.extends) {
             return Promise.resolve(null);
         }
-        let promise = Promise.resolve();
-        if (dry.dependencies) {
-            promise = this.dependencyResolver.resolve(dry.dependencies);
+
+        // simply load a package-dry.json (most likely in the same repository)
+        if (dry.extends.startsWith('file://')) {
+            return this.loadFromFile(dry.extends.replace('file://', ''));
+        } else {
+            console.info('resolving the dry.extends', dry.extends);
+
+            let packageName = '';
+            if (dry.extends.startsWith('ssh://')) {
+                // assume that the reponame is the packageName
+                const matched = dry.extends.match('([\\w|\\-|_]+)\\.git');
+                if (matched[1]) {
+                    packageName = matched[1];
+                } else {
+                    throw new Error('couldn\'t extract packageName from:' + dry.extends);
+                }
+            } else {
+                packageName = dry.extends.split('@')[0];
+            }
+
+            const packagePath = './node_modules/' + packageName;
+
+            if (fs.existsSync(packagePath)) {
+                console.info('using existing package', packagePath);
+
+                return this.loadFromFile(packagePath + '/' + DryPackage.PACKAGE_DRY_JSON);
+            } else {
+                // TODO allow the extends syntax to have a file declared at the end
+                return this.dependencyResolver.resolveRaw([dry.extends])
+                    .then(() => {
+                        return this.loadFromFile(packagePath + '/' + DryPackage.PACKAGE_DRY_JSON);
+                    });
+            }
         }
-        return promise.then(() => new DryPackage(this.dependencyResolver, this.location, require(dry.extends)));
     }
 
     public get content(): WeakDryPackageContent {
