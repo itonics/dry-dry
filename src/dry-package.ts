@@ -6,7 +6,6 @@ import {DependencyResolver} from './dependency-resolver';
 import {DryPackageContent} from './dry-package-content';
 import {JsonUtils} from './json-utils';
 import {NpmPackage} from './npm-package';
-import {error} from 'util';
 
 // TODO: consider adding a type to 'any'
 // tslint:disable-next-line:no-any
@@ -22,7 +21,7 @@ export class DryPackage {
     private constructor(private readonly dependencyResolver: DependencyResolver,
                         private readonly location: string,
                         // tslint:disable-next-line:variable-name
-                        private _content: WeakDryPackageContent,) {
+                        private _content: WeakDryPackageContent) {
     }
 
     public static readFromDisk(dependencyResolver: DependencyResolver): DryPackage {
@@ -80,9 +79,13 @@ export class DryPackage {
 
         collectedPackages.push(currentPackage);
 
-        return currentPackage.getParent().then<NpmPackage>((parent) => {
-            if (parent) {
-                return this.doBuildNpmPackage(parent, collectedPackages);
+        return currentPackage.getParent().then<NpmPackage>((parents) => {
+            if (parents) {
+                const mergedParents: DryPackage = parents.reduce((prev: DryPackage, current: DryPackage): DryPackage => {
+                    prev.merge(current);
+                    return prev;
+                });
+                return this.doBuildNpmPackage(mergedParents, collectedPackages);
             } else {
                 const mergedPackage = collectedPackages.pop();
                 while (collectedPackages.length > 0) {
@@ -96,7 +99,7 @@ export class DryPackage {
     private loadFromFile(path: string): Promise<DryPackage> {
         console.info('loading dry from path', path);
         try {
-            let content = fs.readFileSync(path, 'utf8');
+            const content: string = fs.readFileSync(path, 'utf8');
 
             return Promise.resolve(new DryPackage(this.dependencyResolver, path, JSON.parse(content)));
         } catch (e) {
@@ -106,7 +109,7 @@ export class DryPackage {
         }
     }
 
-    private getParent(): Promise<DryPackage> {
+    private getParent(): Promise<DryPackage[]> {
         const dry = this._content.dry;
         if (!dry) {
             return Promise.resolve(null);
@@ -114,37 +117,69 @@ export class DryPackage {
         if (!dry.extends) {
             return Promise.resolve(null);
         }
-
         // simply load a package-dry.json (most likely in the same repository)
-        if (dry.extends.startsWith('file://')) {
-            return this.loadFromFile(dry.extends.replace('file://', ''));
-        } else {
-            console.info('resolving the dry.extends', dry.extends);
+        if (typeof dry.extends === 'string') {
+            return this.handlePackages([dry.extends], []);
+        } else if (typeof dry.extends === 'object' && dry.extends.length) {
+            return this.handlePackages(dry.extends, []);
+        }
+        return Promise.resolve(null);
+    }
 
-            let packageName = '';
-            if (dry.extends.startsWith('ssh://')) {
-                // assume that the reponame is the packageName
-                const matched = dry.extends.match('([\\w|\\-|_]+)\\.git');
-                if (matched[1]) {
-                    packageName = matched[1];
+    private handlePackages(extendsArray: string[], allParentPackages?: DryPackage[]): Promise<DryPackage[]> {
+        const loadingPackages: Promise <DryPackage[]> = new Promise((resolvePromise) => {
+            this.handleExtend(extendsArray.shift()).then((pkg: DryPackage) => {
+                allParentPackages.push(pkg);
+                if (extendsArray.length > 0) {
+                    this.handlePackages(extendsArray, allParentPackages).then((returnedParentPackages: DryPackage[]) => {
+                        resolvePromise(returnedParentPackages);
+                    });
                 } else {
-                    throw new Error('couldn\'t extract packageName from:' + dry.extends);
+                    resolvePromise(allParentPackages);
+                }
+            });
+        });
+        return loadingPackages;
+    }
+
+    private handleExtend(extend: string): Promise<DryPackage> {
+        if (extend.startsWith('file://')) {
+            return this.loadFromFile(extend.replace('file://', ''));
+        } else {
+            console.info('resolving the dry.extends', extend);
+
+            let packageName: string = '';
+            let packageFile: string = '/' + DryPackage.PACKAGE_DRY_JSON;
+            let realGitRepoUrl: string = extend;
+            let branch: string = '';
+            const matched: string[] = extend.match('([\\w|\\-|_]+)\\.git');
+            if (matched.length && matched.length === 2) {
+                // assume that the reponame is the packageName
+                packageName = matched[1];
+                const splitExtend: string[] = extend.split(packageName + '.git', 2);
+                if (splitExtend.length > 1) {
+                    packageFile = splitExtend[1];
+                    const matchedbranch: string[] = packageFile.match('^/#([\\w|\\-|_]*)');
+                    if (matchedbranch.length && matchedbranch.length === 2) {
+                        branch = matchedbranch[1];
+                        packageFile = packageFile.substr(matchedbranch[0].length);
+                    }
+                    realGitRepoUrl = splitExtend[0].concat(packageName, '.git');
                 }
             } else {
-                packageName = dry.extends.split('@')[0];
+                throw new Error('couldn\'t extract packageName from:' + extend);
             }
 
-            const packagePath = './node_modules/' + packageName;
+            const packagePath = './cloned-repos/'.concat(packageName, branch ? '/'.concat(branch) : '') ;
 
             if (fs.existsSync(packagePath)) {
                 console.info('using existing package', packagePath);
 
-                return this.loadFromFile(packagePath + '/' + DryPackage.PACKAGE_DRY_JSON);
+                return this.loadFromFile(packagePath + '/' + packageFile);
             } else {
-                // TODO allow the extends syntax to have a file declared at the end
-                return this.dependencyResolver.resolveRaw([dry.extends])
+                return this.dependencyResolver.resolveRaw([branch ? '-b '.concat(branch) : '', realGitRepoUrl, packagePath])
                     .then(() => {
-                        return this.loadFromFile(packagePath + '/' + DryPackage.PACKAGE_DRY_JSON);
+                        return this.loadFromFile(packagePath + '/' + packageFile);
                     });
             }
         }

@@ -50,7 +50,7 @@ export class DependencyResolver {
         console.info('resolving', args);
 
         if (args.length > 0) {
-            let commandLine = 'npm install --no-save ' + args.join(' ');
+            let commandLine = 'git clone ' + args.join(' ');
 
             return this.cli.execute(commandLine)
                 .catch((error) => {
