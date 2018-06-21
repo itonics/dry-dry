@@ -159,7 +159,7 @@ export class DryPackage {
                 const splitExtend: string[] = extend.split(packageName + '.git', 2);
                 if (splitExtend.length > 1) {
                     packageFile = splitExtend[1];
-                    const matchedbranch: string[] = packageFile.match('^/#([\\w|\\-|_]*)');
+                    const matchedbranch: string[] = packageFile.match('^#([\\w|\\-|_]*)');
                     if (matchedbranch.length && matchedbranch.length === 2) {
                         branch = matchedbranch[1];
                         packageFile = packageFile.substr(matchedbranch[0].length);
