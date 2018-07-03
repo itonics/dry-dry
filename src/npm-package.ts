@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 
-import { DryPackage } from './dry-package';
-import { JsonUtils } from './json-utils';
+import {DryPackage} from './dry-package';
+import {JsonUtils} from './json-utils';
 
 /**
  * npm 'package.json' component
@@ -14,7 +14,7 @@ export class NpmPackage {
     /**
      * The content of this NpmPackage
      */
-    // tslint:disable-next-line:no-any
+        // tslint:disable-next-line:no-any
     private readonly content: any;
 
     /**
@@ -33,7 +33,19 @@ export class NpmPackage {
         if (!this.dryPackage.exists()) {
             return;
         }
-        fs.writeFileSync(this.location, JsonUtils.prettyStringify(this.content));
+
+        try {
+            fs.unlinkSync(this.location);
+        } catch (e) {
+            // TODO
+            console.error(e);
+        }
+
+        let json = JsonUtils.prettyStringify(this.content);
+
+        console.info('json', json);
+
+        fs.writeFileSync(this.location, json);
     }
 
     /**
@@ -45,12 +57,14 @@ export class NpmPackage {
             fileContent = fs.readFileSync(this.location, 'utf8');
         } catch (e) {
             // TODO
+            console.error(e);
         }
         this.dryPackage.applyDiff(this.content, JSON.parse(fileContent));
-        try {
-            fs.unlinkSync(this.location);
-        } catch (e) {
-            // TODO
-        }
+        // try {
+        //     fs.unlinkSync(this.location);
+        // } catch (e) {
+        //     // TODO
+        //     console.error(e);
+        // }
     }
 }
